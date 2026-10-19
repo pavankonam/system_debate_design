@@ -1,0 +1,9 @@
+# Debate outputs (may contain your private product ideas)
+prd_runs/
+
+# Python
+__pycache__/
+*.pyc
+
+# Secrets
+.env
