@@ -262,6 +262,7 @@ claude "Read PRD.md and create an implementation plan, then build the MVP."
 | DeepSeek error **404** mentioning "data policy" | Open https://openrouter.ai/settings/privacy and allow the setting it asks for |
 | DeepSeek rate limited | The script retries automatically. If it keeps failing, wait or use `DEEPSEEK_API_KEY` |
 | Hitting Claude Pro or ChatGPT Plus limits | Each round makes several calls. Use `--rounds 2` for smaller ideas |
+| Your PRD or idea file won't load | Plain text, Markdown and Word (.docx) files work in any encoding. For Pages, PDF or RTF files, export or copy the text into a .md or .txt file first |
 | A reviewer is unavailable in a round | The round continues with the others, but consensus requires all three |
 
 ---

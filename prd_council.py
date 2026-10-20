@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import zipfile
 import subprocess
 import sys
 import tempfile
@@ -237,7 +238,7 @@ def call_claude(prompt):
     workdir = _empty_workdir()
     try:
         res = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
+            cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
             cwd=workdir, timeout=CLI_TIMEOUT,
         )
     finally:
@@ -259,12 +260,12 @@ def call_gpt(prompt):
     cmd.append("-")  # read prompt from stdin
     try:
         res = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
+            cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
             cwd=workdir, timeout=CLI_TIMEOUT,
         )
         text = ""
         if os.path.exists(out_file):
-            text = Path(out_file).read_text(encoding="utf-8").strip()
+            text = Path(out_file).read_text(encoding="utf-8", errors="replace").strip()
         if not text:
             text = res.stdout.strip()
     finally:
@@ -582,6 +583,60 @@ def write_outputs(out_dir, prd, history, consensus, last_reviews, rounds):
     (out_dir / "ISSUES_LOG.md").write_text("\n".join(lines), encoding="utf-8")
 
 
+def _docx_to_text(path):
+    """Extract plain text from a Word .docx file using only the standard library."""
+    with zipfile.ZipFile(path) as z:
+        xml = z.read("word/document.xml").decode("utf-8", "ignore")
+    xml = re.sub(r"</w:p>", "\n", xml)          # paragraph ends become newlines
+    xml = re.sub(r"<w:tab/>", "\t", xml)
+    xml = re.sub(r"<w:br[^>]*/>", "\n", xml)
+    text = re.sub(r"<[^>]+>", "", xml)
+    for a, b in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&apos;", "'")):
+        text = text.replace(a, b)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def read_input_file(path):
+    """Read an idea or PRD file, whatever format or encoding it was saved in."""
+    path = Path(path)
+    raw = path.read_bytes()
+
+    if raw[:4] == b"PK\x03\x04":  # zip container: Word .docx, or Pages
+        try:
+            with zipfile.ZipFile(path) as z:
+                names = z.namelist()
+        except zipfile.BadZipFile:
+            names = []
+        if "word/document.xml" in names:
+            print(f"   (note: {path.name} is a Word document; extracting its text)")
+            return _docx_to_text(path)
+        raise CouncilError(
+            f"{path.name} looks like a Pages or other packaged document, not text. "
+            "Open it and use File > Export To > Plain Text (or Word), then try again."
+        )
+    if raw[:5] == b"%PDF-":
+        raise CouncilError(
+            f"{path.name} is a PDF. Copy its text into a .md or .txt file, then try again."
+        )
+    if raw[:5] == b"{\\rtf":
+        raise CouncilError(
+            f"{path.name} is a Rich Text (RTF) file. In TextEdit choose Format > "
+            "Make Plain Text, save, then try again."
+        )
+
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16")
+    for enc in ("utf-8-sig", "cp1252", "mac_roman"):
+        try:
+            text = raw.decode(enc)
+            if enc != "utf-8-sig":
+                print(f"   (note: {path.name} is not UTF-8; read it as {enc})")
+            return text
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("latin-1")  # never fails
+
+
 def check_members(callers):
     ok = True
     for key, fn in callers.items():
@@ -624,12 +679,18 @@ def main():
         prd_path = Path(args.prd)
         if not prd_path.is_file():
             p.error(f"PRD file not found: {args.prd}")
-        idea = prd_path.read_text(encoding="utf-8")
+        try:
+            idea = read_input_file(prd_path)
+        except CouncilError as e:
+            p.error(str(e))
     else:
         if not args.idea:
             p.error("give an idea file, a quoted idea, or --prd FILE (or use --check)")
         idea_path = Path(args.idea)
-        idea = idea_path.read_text(encoding="utf-8") if idea_path.is_file() else args.idea
+        try:
+            idea = read_input_file(idea_path) if idea_path.is_file() else args.idea
+        except CouncilError as e:
+            p.error(str(e))
     if len(idea.strip()) < 10:
         p.error("the input is too short; describe it in at least a sentence or two")
 
